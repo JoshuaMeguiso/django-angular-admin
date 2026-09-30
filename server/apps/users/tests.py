@@ -1,4 +1,7 @@
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group, Permission
+from django.contrib.contenttypes.models import ContentType
+from django.core.management import call_command
 from django.test import TestCase
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -153,3 +156,54 @@ class ProtectedUserAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["username"], "jane")
+
+
+class RoleSetupTests(TestCase):
+    def setUp(self):
+        inventory_content_type = ContentType.objects.create(
+            app_label="inventory",
+            model="inventoryrecord",
+        )
+        for action in ("view", "add", "change", "delete"):
+            Permission.objects.create(
+                content_type=inventory_content_type,
+                codename=f"{action}_inventoryrecord",
+                name=f"Can {action} inventory record",
+            )
+
+    def test_setup_roles_creates_inventory_groups_with_expected_permissions(self):
+        call_command("setup_roles")
+
+        viewer = Group.objects.get(name="Viewer")
+        inventory_manager = Group.objects.get(name="Inventory Manager")
+
+        self.assertEqual(
+            set(viewer.permissions.values_list("codename", flat=True)),
+            {"view_inventoryrecord"},
+        )
+        self.assertEqual(
+            set(inventory_manager.permissions.values_list("codename", flat=True)),
+            {
+                "view_inventoryrecord",
+                "add_inventoryrecord",
+                "change_inventoryrecord",
+            },
+        )
+
+    def test_setup_roles_is_idempotent(self):
+        call_command("setup_roles")
+        call_command("setup_roles")
+
+        self.assertEqual(Group.objects.filter(name="Viewer").count(), 1)
+        self.assertEqual(Group.objects.filter(name="Inventory Manager").count(), 1)
+
+    def test_viewer_receives_only_view_inventory_permission(self):
+        call_command("setup_roles")
+        user = get_user_model().objects.create_user(
+            username="viewer",
+            password="correct-horse-battery-staple",
+        )
+        user.groups.add(Group.objects.get(name="Viewer"))
+
+        self.assertTrue(user.has_perm("inventory.view_inventoryrecord"))
+        self.assertFalse(user.has_perm("inventory.add_inventoryrecord"))
