@@ -19,3 +19,4 @@ client/.angular/
 .env
 .vscode/
 *.log
+.github/
